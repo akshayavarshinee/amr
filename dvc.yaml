@@ -1,0 +1,56 @@
+stages:
+  inspect:
+    cmd: python -m amr_guard.data.inspect_dataset ${data.raw_csv}
+    deps:
+      - ${data.raw_csv}
+      - src/amr_guard/data/inspect_dataset.py
+    params:
+      - data.raw_csv
+    outs:
+      - ${paths.reports_dir}/dataset_inspection_report.json
+
+  preprocess:
+    cmd: python -m amr_guard.data.preprocess
+    deps:
+      - ${data.raw_csv}
+      - src/amr_guard/data/preprocess.py
+    params:
+      - data.raw_csv
+      - data.organism_filter
+      - data.antibiotic_filter
+      - data.random_state
+      - data.test_size
+    outs:
+      - ${paths.processed_dir}/clean_dataset.csv
+      - ${paths.processed_dir}/feature_matrix.csv
+      - ${paths.processed_dir}/train.csv
+      - ${paths.processed_dir}/val.csv
+      - ${paths.processed_dir}/test.csv
+    metrics:
+      - ${paths.processed_dir}/preprocessing_report.json:
+          cache: false
+
+  train:
+    cmd: python -m amr_guard.models.train
+    deps:
+      - ${paths.processed_dir}/train.csv
+      - ${paths.processed_dir}/val.csv
+      - ${paths.processed_dir}/test.csv
+      - src/amr_guard/models/train.py
+      - src/amr_guard/models/tune.py
+      - src/amr_guard/models/evaluate.py
+    params:
+      - xgboost
+      - logistic_regression
+      - rule_baseline
+      - optuna
+      - threshold_tuning
+      - data.random_state
+    outs:
+      - ${paths.models_dir}/xgboost_phase1.pkl
+      - ${paths.models_dir}/logistic_regression.pkl
+    metrics:
+      - ${paths.reports_dir}/evaluation_report.json:
+          cache: false
+      - ${paths.reports_dir}/decision_threshold.json:
+          cache: false

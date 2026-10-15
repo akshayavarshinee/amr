@@ -5,10 +5,10 @@
 
 ---
 
-## Phase 1 Architecture (current)
+## Phase 1 Architecture (3-Way Evaluation & Canonical Prep)
 
 ```
-BV-BRC AMR CSV (raw, read-only)
+BV-BRC AMR CSV (raw, read-only: 235,525 rows)
         │
         ▼
 ┌─────────────────────────────┐
@@ -23,10 +23,10 @@ BV-BRC AMR CSV (raw, read-only)
 │   Preprocessing Pipeline    │  preprocess.py
 │   - organism/ab filter      │  → data/processed/clean_dataset.csv
 │   - label normalization     │  → data/processed/feature_matrix.csv
-│   - deduplication           │  → data/processed/train.csv
-│   - leakage exclusion       │  → data/processed/test.csv
-│   - categorical encoding    │  → reports/preprocessing_report.json
-│   - stratified 80/20 split  │
+│   - conflict policy & dedup │  → data/processed/train.csv
+│   - leakage exclusion       │  → data/processed/val.csv
+│   - categorical encoding    │  → data/processed/test.csv
+│   - 3-way stratified split  │  → reports/preprocessing_report.json
 └────────────┬────────────────┘
              │
              ▼
@@ -46,125 +46,53 @@ BV-BRC AMR CSV (raw, read-only)
      │          │             │
      └──────────┼─────────────┘
                 │
-                ▼
+                ▼ (Tuned & Selected on Validation Set)
 ┌─────────────────────────────┐
 │   Evaluation Layer          │  evaluate.py
 │   - accuracy / F1 / MCC     │  → reports/evaluation_report.json
 │   - ROC-AUC / PR-AUC        │  → reports/model_comparison.csv
 │   - confusion matrix plots  │  → reports/confusion_matrix_*.png
+│   - ONE untouched Test eval │
 └────────────┬────────────────┘
              │
              ▼
 ┌─────────────────────────────┐
-│   Model Artifact            │  → models/artifacts/xgboost_phase1.pkl
-│   XGBoost (calibrated)      │
+│   Model Artifact Bundle     │  → models/artifacts/xgboost_phase1.pkl
+│   (XGBoost, Encoders,       │
+│    Feature Order, Threshold)│
 └─────────────────────────────┘
 ```
 
 ---
 
-## Target Scope (Phase 1)
+## Target Scope
 
 | Dimension     | Value                       |
 |---------------|-----------------------------|
-| Organism      | Escherichia coli            |
+| Organism      | *Escherichia coli*          |
 | Antibiotic    | Ciprofloxacin               |
 | Labels        | Resistant (1) / Susceptible (0) |
-| Dataset       | BV-BRC BVBRC_genome_amr.csv |
+| Dataset       | BV-BRC `BVBRC_genome_amr.csv` |
 | Model         | XGBoost (calibrated)        |
 | Baselines     | Majority-class rule, Logistic Regression |
+| Data Split    | Train (70%) / Validation (15%) / Test (15%) |
 
 ---
 
 ## Leakage Risk – Excluded Features
 
-The BV-BRC dataset contains columns that encode the method used to generate the
-phenotype label (e.g., `Computational Method = "SIR XGBoost Model"`). These are
-excluded from all model features to prevent label leakage:
+The BV-BRC dataset contains columns that encode the outcome or computational estimation of resistance. These are excluded from all model features to prevent label leakage:
 
 - `computational_method`
 - `computational_method_version`
 - `computational_method_performance`
 - `evidence`
 - `measurement`, `measurement_sign`, `measurement_value`, `measurement_unit`
+- `resistant_phenotype` (target)
+- `genome_name`, `source`, `pubmed`, `taxon_id`
 
 ---
 
-## Later Phases (planned)
+## Positioning Statement
 
-```
-Phase 1 Model Artifact
-        │
-        ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 2 – Experiment Tracking & Versioning           │
-│  MLflow model registry, DVC dataset versioning        │
-│  dataset hash, feature schema version, model version  │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 3 – AutoML + Model Optimisation                │
-│  FLAML / Optuna hyperparameter search                 │
-│  class imbalance handling, threshold tuning           │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 4 – API Deployment                             │
-│  FastAPI: /predict  /batch-predict  /health           │
-│  /models/current  /monitoring/drift  /retrain         │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 5 – CLI Batch + Live Processing                │
-│  amr-guard predict  batch  watch                      │
-│  parallel workers, CSV / Excel / JSON export          │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 6 – Monitoring & Drift Detection               │
-│  feature drift, prediction drift, performance decay   │
-│  Evidently AI / custom Streamlit dashboard            │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 7 – Automated Retraining                       │
-│  drift trigger → validate → train → compare           │
-│  → promote only if better → log → alert               │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Phase 8 – CI/CD + Dockerisation                      │
-│  GitHub Actions: lint → test → build → push → deploy  │
-│  Docker Compose: api + mlflow + dashboard + db        │
-└───────────────────────────────────────────────────────┘
-```
-
----
-
-## Prediction Response (future API)
-
-```json
-{
-  "sample_id": "ECOLI_001",
-  "prediction": "Resistant",
-  "probability": 0.87,
-  "confidence": "High",
-  "model_version": "ecoli-cipro-v1",
-  "evidence": ["gyrA mutation", "qnr gene"],
-  "warnings": []
-}
-```
-
----
-
-## One-line Positioning
-
-> AMR-GenomeGuard turns bacterial genome metadata into monitored, explainable,
-> version-controlled AMR phenotype predictions, with CLI automation for
-> high-throughput surveillance workflows.
+> AMR-GenomeGuard turns bacterial genome metadata into monitored, explainable, version-controlled AMR phenotype predictions, with CLI automation for high-throughput surveillance workflows.

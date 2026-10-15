@@ -1,0 +1,41 @@
+{
+  "total_labeled_genomes": 10,
+  "unique_labeled_genomes": 10,
+  "conflicting_genomes_count": 0,
+  "duplicate_genomes_count": 0,
+  "valid_fasta_genomes": 10,
+  "missing_fasta_genomes": 0,
+  "empty_fasta_genomes": 0,
+  "malformed_fasta_genomes": 0,
+  "resistant_genomes": 8,
+  "susceptible_genomes": 2,
+  "total_contigs": 250,
+  "sequence_length_stats": {
+    "mean": 1008844.8,
+    "min": 142109,
+    "max": 3229284,
+    "total_bases": 10088448
+  },
+  "contig_count_stats": {
+    "mean": 25.0,
+    "min": 25,
+    "max": 25
+  },
+  "k": 6,
+  "feature_count": 4096,
+  "train_size": 6,
+  "val_size": 2,
+  "test_size": 2,
+  "split_overlap_check": "PASSED",
+  "label_balance_train": {
+    "1": 5,
+    "0": 1
+  },
+  "label_balance_val": {
+    "0": 1,
+    "1": 1
+  },
+  "label_balance_test": {
+    "1": 2
+  }
+}

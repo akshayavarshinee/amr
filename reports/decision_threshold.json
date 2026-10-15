@@ -1,0 +1,4 @@
+{
+  "model": "xgboost_genomic_kmer",
+  "threshold": 0.45
+}

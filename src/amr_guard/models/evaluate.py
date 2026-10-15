@@ -1,5 +1,4 @@
-"""
-Model evaluation utilities.
+"""Model evaluation utilities.
 
 Returns a metrics dict with accuracy, precision, recall, F1, ROC-AUC,
 PR-AUC, MCC, and saves a confusion matrix plot.
@@ -29,18 +28,22 @@ def evaluate_model(
     model,
     X_test: pd.DataFrame,
     y_test: pd.Series,
+    threshold: float | None = None,
     model_name: str = "model",
     plots_dir: str | Path = "reports",
 ) -> dict:
     plots_dir = Path(plots_dir)
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    y_pred = model.predict(X_test)
-
     has_proba = hasattr(model, "predict_proba")
     if has_proba:
         y_prob = model.predict_proba(X_test)[:, 1]
+        if threshold is not None:
+            y_pred = (y_prob >= threshold).astype(int)
+        else:
+            y_pred = model.predict(X_test)
     else:
+        y_pred = model.predict(X_test)
         y_prob = y_pred.astype(float)
 
     metrics = {
@@ -59,19 +62,23 @@ def evaluate_model(
         except Exception:
             metrics["roc_auc"] = None
             metrics["pr_auc"] = None
+    else:
+        metrics["roc_auc"] = None
+        metrics["pr_auc"] = None
 
-    metrics["confusion_matrix"] = confusion_matrix(y_test, y_pred).tolist()
+    cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+    metrics["confusion_matrix"] = cm.tolist()
 
     # Confusion matrix plot
     fig, ax = plt.subplots(figsize=(5, 4))
     disp = ConfusionMatrixDisplay(
-        confusion_matrix=np.array(metrics["confusion_matrix"]),
+        confusion_matrix=cm,
         display_labels=["Susceptible", "Resistant"],
     )
     disp.plot(ax=ax, colorbar=False)
     ax.set_title(f"{model_name} – Confusion Matrix")
     plt.tight_layout()
-    safe_name = model_name.lower().replace(" ", "_")
+    safe_name = model_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
     fig.savefig(plots_dir / f"confusion_matrix_{safe_name}.png", dpi=150)
     plt.close(fig)
 

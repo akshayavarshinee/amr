@@ -1,0 +1,2 @@
+fasta_path,prediction,probability,confidence,threshold,model_version,feature_version
+data/raw/genomes/562.134043.fna,Resistant,0.4904,Low,0.45000000000000007,ecoli-cipro-v1,kmer-6-v1

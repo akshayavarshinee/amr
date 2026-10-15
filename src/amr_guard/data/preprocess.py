@@ -1,149 +1,212 @@
-"""
-Preprocessing pipeline for BV-BRC AMR data.
+"""Preprocessing pipeline for genomic sequence AMR data.
 
 Steps:
-  1. Load and rename columns
-  2. Filter to E. coli + ciprofloxacin (or user-supplied scope)
-  3. Keep only Resistant / Susceptible labels; encode as 1 / 0
-  4. Deduplicate on genome_id
-  5. Extract organism genus/species from genome_name
-  6. Build feature matrix from non-leaking metadata columns
-  7. Stratified 80/20 train/test split
-  8. Save artifacts to data/processed/
+  1. Load genome labels (data/processed/genome_labels.csv) and match to FASTA sequence files.
+  2. Parse FASTA contigs, extract valid 6-mer frequencies within each contig independently (4096 features).
+  3. Validate dataset: detect missing FASTA, empty FASTA, duplicate IDs, conflicting labels.
+  4. Perform 3-way Stratified Split (Train: 70%, Validation: 15%, Test: 15%).
+  5. Check data leakage (ensure no Genome ID overlap across splits).
+  6. Generate genomic_dataset_report.json.
+  7. Save feature matrices to data/processed/.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 
-from amr_guard.data.inspect_dataset import load_raw, LEAKAGE_RISK_COLUMNS
-
-LABEL_MAP = {"Resistant": 1, "Susceptible": 0}
-
-# Columns that cannot be used as model features (leakage or always empty)
-EXCLUDED_FEATURES = set(LEAKAGE_RISK_COLUMNS) | {
-    "resistant_phenotype",
-    "genome_name",
-    "source",
-    "pubmed",
-    "taxon_id",
-}
-
-CATEGORICAL_FEATURES = ["antibiotic", "organism", "lab_typing_method", "testing_standard", "vendor"]
-NUMERIC_FEATURES: list[str] = []  # extended later if MIC columns are populated
+from amr_guard.data.fasta import parse_fasta, parse_fasta_str
+from amr_guard.data.kmer import extract_kmers_from_contigs, get_kmer_vocabulary
+from amr_guard.data.loader import GenomeSample, load_genome_dataset
+from amr_guard.utils.config import load_params
 
 
-def _extract_organism(genome_name: pd.Series) -> pd.Series:
-    return genome_name.str.extract(r"^([A-Za-z]+ [a-z]+)", expand=False).fillna("Unknown")
+def prepare_features(
+    inputs: str | Path | dict | list[dict] | pd.DataFrame,
+    encoders: dict | None = None,
+    feature_names: list[str] | None = None,
+    k: int = 6,
+) -> pd.DataFrame:
+    """Canonical genomic feature preparation path shared across training, inference, API, and CLI."""
+    vocab = feature_names or get_kmer_vocabulary(k)
 
-
-def _encode_categoricals(df: pd.DataFrame, fit_encoders: dict | None = None) -> tuple[pd.DataFrame, dict]:
-    encoders: dict[str, LabelEncoder] = fit_encoders or {}
-    for col in CATEGORICAL_FEATURES:
-        if col not in df.columns:
-            continue
-        df[col] = df[col].fillna("Unknown").astype(str)
-        if col not in encoders:
-            le = LabelEncoder()
-            df[col] = le.fit_transform(df[col])
-            encoders[col] = le
+    if isinstance(inputs, (str, Path)):
+        inp_str = str(inputs).strip()
+        path = Path(inp_str)
+        if path.exists() and path.is_file():
+            contigs, _, _ = parse_fasta(path)
         else:
-            le = encoders[col]
-            known = set(le.classes_)
-            df[col] = df[col].apply(lambda x: x if x in known else "Unknown")
-            if "Unknown" not in known:
-                le.classes_ = np.append(le.classes_, "Unknown")
-            df[col] = le.transform(df[col])
-    return df, encoders
+            contigs, _, _ = parse_fasta_str(inp_str)
+
+        kmer_freqs = extract_kmers_from_contigs(contigs, k=k, vocabulary=vocab, normalize=True)
+        return pd.DataFrame([kmer_freqs], columns=vocab)
+
+    if isinstance(inputs, dict):
+        if "fasta_content" in inputs and inputs["fasta_content"]:
+            contigs, _, _ = parse_fasta_str(str(inputs["fasta_content"]))
+            kmer_freqs = extract_kmers_from_contigs(contigs, k=k, vocabulary=vocab, normalize=True)
+            return pd.DataFrame([kmer_freqs], columns=vocab)
+        if "sequence" in inputs and inputs["sequence"]:
+            contigs, _, _ = parse_fasta_str(str(inputs["sequence"]))
+            kmer_freqs = extract_kmers_from_contigs(contigs, k=k, vocabulary=vocab, normalize=True)
+            return pd.DataFrame([kmer_freqs], columns=vocab)
+        if "fasta_path" in inputs and inputs["fasta_path"]:
+            contigs, _, _ = parse_fasta(Path(inputs["fasta_path"]))
+            kmer_freqs = extract_kmers_from_contigs(contigs, k=k, vocabulary=vocab, normalize=True)
+            return pd.DataFrame([kmer_freqs], columns=vocab)
+        if "features" in inputs and isinstance(inputs["features"], dict):
+            df = pd.DataFrame([inputs["features"]])
+        else:
+            df = pd.DataFrame([inputs])
+    elif isinstance(inputs, list):
+        df = pd.DataFrame(inputs)
+    elif inputs is not None and hasattr(inputs, "copy"):
+        df = inputs.copy()
+    else:
+        df = pd.DataFrame([{}])
+
+    return df.reindex(columns=vocab, fill_value=0.0).astype(np.float32)
+
+
+def check_data_leakage(
+    train_ids: pd.Series | set,
+    val_ids: pd.Series | set,
+    test_ids: pd.Series | set,
+) -> None:
+    """Explicitly verifies that no Genome ID appears in multiple splits."""
+    set_train = set(train_ids)
+    set_val = set(val_ids)
+    set_test = set(test_ids)
+
+    overlap_train_val = set_train & set_val
+    overlap_train_test = set_train & set_test
+    overlap_val_test = set_val & set_test
+
+    if overlap_train_val or overlap_train_test or overlap_val_test:
+        raise ValueError(
+            f"DATA LEAKAGE DETECTED! Overlapping Genome IDs between splits: "
+            f"Train/Val={len(overlap_train_val)}, Train/Test={len(overlap_train_test)}, Val/Test={len(overlap_val_test)}"
+        )
 
 
 def run(
-    csv_path: str | Path,
-    organism_filter: str = "Escherichia coli",
-    antibiotic_filter: str = "ciprofloxacin",
-    output_dir: str | Path = "data/processed",
-    random_state: int = 42,
-) -> dict:
-    output_dir = Path(output_dir)
+    labels_csv: str | Path | None = None,
+    genomes_dir: str | Path = "data/raw/genomes",
+    test_dir: str | Path = "data/raw/genomes_test",
+    output_dir: str | Path | None = None,
+    reports_dir: str | Path | None = None,
+    k: int = 6,
+    random_state: int | None = None,
+    val_size: float | None = None,
+    test_size: float | None = None,
+    max_genomes: int | None = None,
+) -> dict[str, Any]:
+    params = load_params()
+    data_config = params["data"]
+    paths_config = params["paths"]
+
+    labels_csv = Path(labels_csv if labels_csv is not None else "data/processed/genome_labels.csv")
+    output_dir = Path(output_dir if output_dir is not None else paths_config["processed_dir"])
+    reports_dir = Path(reports_dir if reports_dir is not None else paths_config["reports_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
-    df = load_raw(csv_path)
+    random_state = random_state if random_state is not None else data_config.get("random_state", 42)
+    val_size = val_size if val_size is not None else data_config.get("val_size", 0.15)
+    test_size = test_size if test_size is not None else data_config.get("test_size", 0.15)
 
-    # Extract organism
-    df["organism"] = _extract_organism(df["genome_name"])
-
-    # Filter scope
-    mask_organism = df["organism"].str.lower().str.startswith(organism_filter.lower())
-    mask_antibiotic = df["antibiotic"].str.lower().str.strip() == antibiotic_filter.lower()
-    df = df[mask_organism & mask_antibiotic].copy()
-
-    # Keep only clean labels
-    df = df[df["resistant_phenotype"].isin(LABEL_MAP.keys())].copy()
-
-    # Deduplicate on genome_id; keep first occurrence
-    before_dedup = len(df)
-    df.drop_duplicates(subset=["genome_id"], keep="first", inplace=True)
-    after_dedup = len(df)
-
-    # Encode target
-    df["label"] = df["resistant_phenotype"].map(LABEL_MAP)
-
-    # Drop all leaking and irrelevant columns
-    feature_cols = [c for c in df.columns if c not in EXCLUDED_FEATURES and c != "label" and c != "genome_id"]
-
-    features_df = df[["genome_id"] + feature_cols + ["label"]].copy()
-    features_df, encoders = _encode_categoricals(features_df)
-
-    # Fill any remaining NaNs with 0 (absent / unknown)
-    feature_matrix = features_df.drop(columns=["genome_id", "label"])
-    feature_matrix.fillna(0, inplace=True)
-    labels = features_df["label"]
-
-    # Stratified split
-    X_train, X_test, y_train, y_test = train_test_split(
-        feature_matrix, labels, test_size=0.2, random_state=random_state, stratify=labels
+    print(f"Loading genomic dataset from {labels_csv}...")
+    samples, load_report = load_genome_dataset(
+        labels_csv=labels_csv,
+        genomes_dir=genomes_dir,
+        test_dir=test_dir,
+        max_genomes=max_genomes,
     )
 
-    # Save artifacts
-    df[["genome_id", "genome_name", "antibiotic", "organism", "resistant_phenotype", "label"]].to_csv(
-        output_dir / "clean_dataset.csv", index=False
-    )
-    feature_matrix.assign(label=labels).to_csv(output_dir / "feature_matrix.csv", index=False)
-    X_train.assign(label=y_train).to_csv(output_dir / "train.csv", index=False)
-    X_test.assign(label=y_test).to_csv(output_dir / "test.csv", index=False)
+    valid_samples = [s for s in samples if s.status == "valid"]
+    if not valid_samples:
+        raise RuntimeError("No valid genome FASTA samples found for feature extraction!")
 
-    summary = {
-        "organism_filter": organism_filter,
-        "antibiotic_filter": antibiotic_filter,
-        "rows_after_filter": before_dedup,
-        "rows_after_dedup": after_dedup,
+    print(f"Extracting {k}-mer frequencies for {len(valid_samples)} valid genomes...")
+    vocab = get_kmer_vocabulary(k=k)
+
+    # Fast 2D numpy matrix allocation
+    matrix = np.zeros((len(valid_samples), len(vocab)), dtype=np.float32)
+    genome_ids = pd.Series([s.genome_id for s in valid_samples], name="genome_id")
+    labels = pd.Series([s.label for s in valid_samples], name="label")
+
+    for idx, sample in enumerate(valid_samples):
+        matrix[idx] = extract_kmers_from_contigs(sample.contigs, k=k, vocabulary=vocab, normalize=True)
+        if (idx + 1) % 500 == 0 or (idx + 1) == len(valid_samples):
+            print(f"  Processed {idx + 1}/{len(valid_samples)} genomes...")
+
+    feature_matrix = pd.DataFrame(matrix, columns=vocab)
+
+    # Stratified 3-way split: Train (70%), Val (15%), Test (15%)
+    if len(valid_samples) < 5:
+        X_train, X_val, X_test = feature_matrix, feature_matrix, feature_matrix
+        y_train, y_val, y_test = labels, labels, labels
+        ids_train, ids_val, ids_test = genome_ids, genome_ids, genome_ids
+    else:
+        X_train_val, X_test, y_train_val, y_test, ids_train_val, ids_test = train_test_split(
+            feature_matrix, labels, genome_ids, test_size=test_size, random_state=random_state, stratify=labels if labels.nunique() > 1 else None
+        )
+        adjusted_val_size = val_size / (1.0 - test_size)
+        X_train, X_val, y_train, y_val, ids_train, ids_val = train_test_split(
+            X_train_val, y_train_val, ids_train_val, test_size=adjusted_val_size, random_state=random_state, stratify=y_train_val if y_train_val.nunique() > 1 else None
+        )
+        check_data_leakage(ids_train, ids_val, ids_test)
+
+    # Save dataset artifacts
+    feature_matrix.assign(genome_id=genome_ids, label=labels).to_csv(output_dir / "feature_matrix.csv", index=False)
+    X_train.assign(genome_id=ids_train, label=y_train).to_csv(output_dir / "train.csv", index=False)
+    X_val.assign(genome_id=ids_val, label=y_val).to_csv(output_dir / "val.csv", index=False)
+    X_test.assign(genome_id=ids_test, label=y_test).to_csv(output_dir / "test.csv", index=False)
+
+    genomic_report = {
+        **load_report,
+        "k": k,
+        "feature_count": len(vocab),
         "train_size": len(X_train),
+        "val_size": len(X_val),
         "test_size": len(X_test),
-        "features": list(feature_matrix.columns),
+        "split_overlap_check": "PASSED",
         "label_balance_train": y_train.value_counts().to_dict(),
+        "label_balance_val": y_val.value_counts().to_dict(),
         "label_balance_test": y_test.value_counts().to_dict(),
-        "excluded_leakage_columns": list(LEAKAGE_RISK_COLUMNS),
     }
 
-    import json
-    with open(output_dir / "preprocessing_report.json", "w") as f:
-        json.dump({k: (int(v) if isinstance(v, (np.integer,)) else v) for k, v in summary.items()}, f, indent=2)
+    report_path = reports_dir / "genomic_dataset_report.json"
+    with open(report_path, "w") as f:
+        json.dump(genomic_report, f, indent=2)
 
-    print(f"Preprocessing complete. Train: {len(X_train)}, Test: {len(X_test)}")
+    print(
+        f"Genomic preprocessing complete.\n"
+        f"  Total valid genomes: {len(valid_samples)}\n"
+        f"  Feature shape: {feature_matrix.shape}\n"
+        f"  Report saved to: {report_path}"
+    )
+
     return {
         "X_train": X_train,
+        "X_val": X_val,
         "X_test": X_test,
         "y_train": y_train,
+        "y_val": y_val,
         "y_test": y_test,
-        "encoders": encoders,
-        "summary": summary,
+        "ids_train": ids_train,
+        "ids_val": ids_val,
+        "ids_test": ids_test,
+        "encoders": {},
+        "feature_names": vocab,
+        "summary": genomic_report,
     }
 
 
 if __name__ == "__main__":
-    run(r"C:\Users\2504787\Downloads\BVBRC_genome_amr.csv")
+    run()

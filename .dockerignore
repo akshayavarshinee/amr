@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+mlruns/
+data/raw
+data/processed
+models/artifacts
+reports/prediction_log.csv
+frontend/
+.git/

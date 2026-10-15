@@ -116,8 +116,11 @@ def inspect(csv_path: str | Path, report_dir: str | Path | None = None) -> dict:
 if __name__ == "__main__":
     import sys
 
-    csv = sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\2504787\Downloads\BVBRC_genome_amr.csv"
-    result = inspect(csv, report_dir="reports")
+    from amr_guard.utils.config import load_params
+
+    config = load_params()
+    csv = sys.argv[1] if len(sys.argv) > 1 else config["data"]["raw_csv"]
+    result = inspect(csv, report_dir=config["paths"]["reports_dir"])
     print(f"Total rows: {result['total_rows']}")
     print(f"Label distribution: {result['label_distribution']}")
     print(f"Top antibiotics: {list(result['top_antibiotics'].keys())[:5]}")

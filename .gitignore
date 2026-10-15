@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+
+# MLflow local tracking store (params.yaml -> mlflow.tracking_uri)
+mlruns/
+
+# DVC-tracked large data/model files, not raw git blobs
+/data/raw
+/data/processed
+/models/artifacts
+
+# Phase 6: prediction log used for drift monitoring (grows unbounded, not a source artifact)
+/reports/prediction_log.csv
+
+# React dashboard
+frontend/node_modules/
+frontend/dist/

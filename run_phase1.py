@@ -9,7 +9,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -19,20 +18,22 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from amr_guard.data.inspect_dataset import inspect
 from amr_guard.data.preprocess import run as preprocess
 from amr_guard.models.train import run as train
+from amr_guard.utils.config import load_params
 
 
 def main():
+    config = load_params()
     parser = argparse.ArgumentParser(description="AMR-GenomeGuard Phase 1 Pipeline")
     parser.add_argument(
         "--csv",
-        default=r"C:\Users\2504787\Downloads\BVBRC_genome_amr.csv",
+        default=config["data"]["raw_csv"],
         help="Path to BV-BRC AMR CSV file",
     )
-    parser.add_argument("--organism", default="Escherichia coli")
-    parser.add_argument("--antibiotic", default="ciprofloxacin")
-    parser.add_argument("--output-data", default="data/processed")
-    parser.add_argument("--output-models", default="models/artifacts")
-    parser.add_argument("--output-reports", default="reports")
+    parser.add_argument("--organism", default=config["data"]["organism_filter"])
+    parser.add_argument("--antibiotic", default=config["data"]["antibiotic_filter"])
+    parser.add_argument("--output-data", default=config["paths"]["processed_dir"])
+    parser.add_argument("--output-models", default=config["paths"]["models_dir"])
+    parser.add_argument("--output-reports", default=config["paths"]["reports_dir"])
     args = parser.parse_args()
 
     print("=" * 60)
@@ -55,22 +56,26 @@ def main():
         output_dir=args.output_data,
     )
     s = data["summary"]
-    print(f"      Rows after filter : {s['rows_after_filter']}")
-    print(f"      Rows after dedup  : {s['rows_after_dedup']}")
-    print(f"      Train / Test      : {s['train_size']} / {s['test_size']}")
+    print(f"      Raw rows          : {s['raw_rows']}")
+    print(f"      Usable genomes    : {s['unique_genomes']}")
+    print(f"      Conflicting genomes: {s['conflicting_label_genome_count']}")
+    print(f"      Train / Val / Test: {s['train_size']} / {s['val_size']} / {s['test_size']}")
     print(f"      Features          : {s['features']}")
 
-    if s["rows_after_dedup"] < 30:
-        print("\nWARNING: fewer than 30 rows found for the selected scope.")
-        print("         Consider broadening organism/antibiotic filter.")
+    if s["unique_genomes"] < 30:
+        print("\nWARNING: fewer than 30 unique genomes found for the selected scope.")
 
     # Step 3: Train + Evaluate
     print("\n[3/3] Training models...")
     results = train(
         data["X_train"],
+        data["X_val"],
         data["X_test"],
         data["y_train"],
+        data["y_val"],
         data["y_test"],
+        encoders=data["encoders"],
+        feature_names=data["feature_names"],
         output_dir=args.output_models,
         reports_dir=args.output_reports,
     )

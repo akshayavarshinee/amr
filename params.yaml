@@ -1,0 +1,88 @@
+# Central configuration for AMR-GenomeGuard pipeline.
+# Consumed by amr_guard.utils.config.load_params() and by dvc.yaml stages.
+# Nothing in the pipeline code should hardcode these values directly.
+
+data:
+  raw_csv: "data/raw/BVBRC_genome_amr.csv"
+  organism_filter: "Escherichia coli"
+  antibiotic_filter: "ciprofloxacin"
+  random_state: 42
+  val_size: 0.15
+  test_size: 0.15
+  conflict_policy: "exclude"
+
+paths:
+  processed_dir: "data/processed"
+  models_dir: "models/artifacts"
+  reports_dir: "reports"
+
+xgboost:
+  n_estimators: 300
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  eval_metric: "logloss"
+  calibration_method: "sigmoid"
+  calibration_cv: 3
+
+logistic_regression:
+  max_iter: 1000
+  class_weight: "balanced"
+
+rule_baseline:
+  group_col: "testing_standard"
+
+mlflow:
+  tracking_uri: "sqlite:///mlruns.db"
+  experiment_name: "amr-genomeguard-phase1"
+  registered_model_name: "ecoli-cipro-xgboost"
+
+prediction:
+  default_model_file: "xgboost_genomic_kmer.pkl"
+  confidence_thresholds:
+    High: 0.75
+    Medium: 0.55
+    Low: 0.0
+
+optuna:
+  enabled: true
+  n_trials: 30
+  timeout_seconds: 600
+  cv_folds: 5
+  metric: "f1"
+  direction: "maximize"
+  search_space:
+    n_estimators: {low: 100, high: 600, step: 50}
+    max_depth: {low: 3, high: 10}
+    learning_rate: {low: 0.01, high: 0.3, log: true}
+    subsample: {low: 0.5, high: 1.0}
+    colsample_bytree: {low: 0.5, high: 1.0}
+
+threshold_tuning:
+  enabled: true
+  metric: "f1"
+  candidate_thresholds: {low: 0.05, high: 0.95, step: 0.05}
+
+api:
+  title: "AMR-GenomeGuard API"
+  version: "0.1.0"
+  model_version: "ecoli-cipro-v1"
+  max_batch_size: 5000
+  host: "0.0.0.0"
+  port: 8000
+
+cli:
+  chunk_size: 1000
+  default_output_format: "csv"
+
+monitoring:
+  log_file: "prediction_log.csv"
+  min_samples: 30
+  psi_bins: 10
+  psi_threshold: 0.2
+
+retrain:
+  metric: "f1"
+  min_improvement: 0.01
+  keep_previous: true

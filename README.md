@@ -1,51 +1,64 @@
 # AMR-GenomeGuard
 
-**MLOps-enabled antibiotic resistance phenotype prediction from bacterial genome data.**
+**MLOps-enabled antibiotic resistance phenotype prediction from BV-BRC bacterial AMR metadata.**
 
 > Research and surveillance decision-support system. Not a clinical treatment recommender.
 
 ---
 
-## Problem
+## Model Scope & Data Disclaimer
 
-Existing AMR tools (CARD/RGI, AMRFinderPlus, ResFinder) detect known resistance genes and mutations.
-They do not provide: phenotype prediction, uncertainty quantification, dataset/model version tracking,
-drift monitoring, or audit logs.
+**Current Model Scope:**
+- **Organism:** *Escherichia coli* (Taxon ID 562)
+- **Antibiotic:** Ciprofloxacin
+- **Dataset:** BV-BRC `BVBRC_genome_amr.csv` (235,525 raw records; ~105.8k unique *E. coli* ciprofloxacin isolate records)
+- **Features Used:** Non-leaking laboratory typing metadata fields (`lab_typing_method`, `lab_typing_method_version`, `lab_typing_platform`, `testing_standard`, `testing_standard_year`, `vendor`).
 
-AMR-GenomeGuard fills this gap: a learning system that predicts resistance phenotypes,
-explains its evidence, tracks versions, monitors drift, and supports high-throughput batch processing.
+> [!NOTE]
+> The current MVP model operates on BV-BRC AMR record metadata. It does **NOT** learn directly from whole-genome FASTA DNA sequences or genomic variant features. Genome IDs and direct phenotype-encoding columns (`computational_method`, `measurement_*`, `evidence`) are strictly excluded to prevent data leakage.
 
 ---
 
-## Phase 1 – Completed
+## 3-Way Train / Validation / Test Methodology
+
+To eliminate test-set leakage:
+- **Train Set (70%):** Fits baseline and XGBoost candidate models.
+- **Validation Set (15%):** Used for Optuna hyperparameter tuning, model candidate selection (static vs. tuned XGBoost), and decision threshold optimization.
+- **Test Set (15%):** Kept completely untouched until final evaluation. Evaluated **exactly once** on the final promoted model artifact.
+
+---
+
+## Pipeline Overview
 
 | Step | Output |
 |------|--------|
 | Dataset inspection | `reports/dataset_inspection_report.json` |
-| Preprocessing | `data/processed/clean_dataset.csv`, `train.csv`, `test.csv` |
+| Preprocessing & Dedup | `data/processed/clean_dataset.csv`, `train.csv`, `val.csv`, `test.csv`, `preprocessing_report.json` |
 | Feature matrix | `data/processed/feature_matrix.csv` |
 | Baseline models | Rule baseline, Logistic Regression |
-| Primary model | XGBoost (calibrated) → `models/artifacts/xgboost_phase1.pkl` |
+| Primary model artifact | XGBoost bundle (model, encoders, feature_names, threshold, metadata) → `models/artifacts/xgboost_phase1.pkl` |
 | Evaluation | `reports/evaluation_report.json`, `model_comparison.csv` |
-| Architecture doc | `docs/architecture.md` |
-
-**Scope:** E. coli + Ciprofloxacin resistance prediction
-**Dataset:** BV-BRC `BVBRC_genome_amr.csv` (89,033 rows)
+| System architecture | `docs/architecture.md` |
 
 ---
 
 ## Quick Start
 
 ```bash
-# Create environment (uv)
-uv venv
-uv pip install -e .
+# Install dependencies
+pip install -e .
 
-# Run full Phase 1 pipeline
-python run_phase1.py --csv path/to/BVBRC_genome_amr.csv
+# Run full end-to-end pipeline (Preprocessing -> Train -> Val -> Test -> Save Artifact)
+python run_phase1.py
 
-# Run tests
-python -m pytest tests/ -v
+# Run all unit and integration tests
+pytest -v
+
+# Launch FastAPI prediction service
+python run_api.py
+
+# Run CLI batch prediction
+amr-guard predict --input data/processed/clean_dataset.csv --output reports/cli_results.csv
 ```
 
 ---
@@ -56,39 +69,50 @@ python -m pytest tests/ -v
 amr-genomeguard/
 ├── src/
 │   └── amr_guard/
-│       ├── data/
-│       │   ├── inspect_dataset.py   # schema inspection, leakage flags
-│       │   └── preprocess.py        # filtering, encoding, train/test split
-│       ├── models/
-│       │   ├── train.py             # rule baseline, logistic regression, XGBoost
-│       │   ├── evaluate.py          # metrics, confusion matrix plots
-│       │   └── predict.py           # single and batch inference
-│       └── utils/
-├── tests/
-│   ├── test_preprocessing.py
-│   └── test_models.py
+│       ├── api/               # FastAPI prediction service & schemas
+│       ├── cli/               # CLI batch processing
+│       ├── data/              # inspection, duplicate resolution, preprocessing & canonical feature prep
+│       ├── models/            # training, 3-way evaluation, Optuna tuning, prediction & retrain
+│       ├── monitoring/        # prediction logging & PSI drift detection
+│       ├── tracking/          # optional MLflow integration
+│       └── utils/             # configuration loader
+├── tests/                     # unit & integration tests
 ├── data/
-│   ├── raw/                         # original files (not committed)
-│   └── processed/                   # derived artifacts
-├── models/
-│   └── artifacts/                   # saved model files
-├── reports/                         # evaluation reports and plots
-├── docs/
-│   └── architecture.md              # full system architecture
-├── run_phase1.py                    # end-to-end pipeline runner
+│   ├── raw/                   # original read-only files
+│   └── processed/             # cleaned 3-way split data & feature matrices
+├── models/artifacts/          # saved model bundle (.pkl)
+├── reports/                   # evaluation reports, decision threshold, prediction log
+├── frontend/                  # React / Vite monitoring dashboard
+├── run_phase1.py              # Phase 1 end-to-end pipeline runner
+├── run_api.py                 # FastAPI service entry point
 └── pyproject.toml
 ```
 
 ---
 
-## Planned Phases
+## API Endpoints
 
-| Phase | Focus |
-|-------|-------|
-| 2 | Experiment tracking (MLflow), data versioning (DVC) |
-| 3 | AutoML (FLAML/Optuna), model optimisation |
-| 4 | FastAPI prediction service |
-| 5 | CLI batch processing, CSV/Excel export |
-| 6 | Monitoring + drift detection dashboard |
-| 7 | Automated retraining pipeline |
-| 8 | CI/CD (GitHub Actions) + Dockerisation |
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/health` | Service liveness and model artifact status |
+| `GET` | `/models/current` | Active model version, path, threshold, and registered name |
+| `POST` | `/predict` | Single-sample prediction using canonical feature preparation |
+| `POST` | `/batch-predict` | Batch predictions for multiple metadata rows |
+| `GET` | `/monitoring/drift` | Feature PSI drift report comparing predictions against training set |
+| `POST` | `/retrain` | Triggers background retrain into scratch workspace & promotes if candidate improves |
+
+---
+
+## Monitoring Dashboard
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+---
+
+## Retraining Safety
+
+The automated retraining engine (`amr_guard.models.retrain`) runs preprocessing and candidate model training inside a isolated scratch directory. The incumbent live model is only overwritten if the candidate's test score exceeds the incumbent's score by at least `min_improvement` (defined in `params.yaml`). On promotion, the previous model is backed up to `xgboost_phase1_prev.pkl` and the API model cache is invalidated automatically.

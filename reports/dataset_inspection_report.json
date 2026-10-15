@@ -1,0 +1,95 @@
+{
+  "total_rows": 235525,
+  "total_columns": 22,
+  "columns": [
+    "taxon_id",
+    "genome_id",
+    "genome_name",
+    "antibiotic",
+    "resistant_phenotype",
+    "measurement",
+    "measurement_sign",
+    "measurement_value",
+    "measurement_unit",
+    "lab_typing_method",
+    "lab_typing_method_version",
+    "lab_typing_platform",
+    "vendor",
+    "testing_standard",
+    "testing_standard_year",
+    "computational_method",
+    "computational_method_version",
+    "computational_method_performance",
+    "evidence",
+    "source",
+    "pubmed",
+    "organism"
+  ],
+  "null_counts": {
+    "taxon_id": 0,
+    "genome_id": 0,
+    "genome_name": 0,
+    "antibiotic": 0,
+    "resistant_phenotype": 116813,
+    "measurement": 115690,
+    "measurement_sign": 230404,
+    "measurement_value": 115690,
+    "measurement_unit": 115690,
+    "lab_typing_method": 219569,
+    "lab_typing_method_version": 235481,
+    "lab_typing_platform": 232414,
+    "vendor": 128649,
+    "testing_standard": 226797,
+    "testing_standard_year": 231018,
+    "computational_method": 16018,
+    "computational_method_version": 16018,
+    "computational_method_performance": 16018,
+    "evidence": 190,
+    "source": 235401,
+    "pubmed": 223201
+  },
+  "label_distribution": {
+    "nan": 116813,
+    "Susceptible": 94764,
+    "Resistant": 23820,
+    "Intermediate": 128
+  },
+  "top_antibiotics": {
+    "ciprofloxacin": 235525
+  },
+  "top_organisms": {
+    "Escherichia coli": 235492,
+    "Escherichia sp": 3
+  },
+  "scope_sample_counts": [
+    {
+      "organism": "Escherichia coli",
+      "antibiotic": "ciprofloxacin",
+      "resistant_phenotype": "Susceptible",
+      "count": 94753
+    },
+    {
+      "organism": "Escherichia coli",
+      "antibiotic": "ciprofloxacin",
+      "resistant_phenotype": "Resistant",
+      "count": 23818
+    },
+    {
+      "organism": "Escherichia sp",
+      "antibiotic": "ciprofloxacin",
+      "resistant_phenotype": "Susceptible",
+      "count": 3
+    }
+  ],
+  "leakage_risk_columns_populated": {
+    "computational_method": 219507,
+    "computational_method_version": 219507,
+    "computational_method_performance": 219507,
+    "evidence": 235335,
+    "measurement": 119835,
+    "measurement_sign": 5121,
+    "measurement_value": 119835,
+    "measurement_unit": 119835
+  },
+  "leakage_note": "Columns like computational_method and evidence likely encode the source of the phenotype label (e.g. 'SIR XGBoost Model'). These MUST be excluded from model features to prevent leakage."
+}
